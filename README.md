@@ -1,5 +1,4 @@
 # Investment Management App — Built with Streamlit
-### 🛠 Technology Stack
 ![Python 3.11](https://img.shields.io/badge/python_3.11-3670A0?style=for-the-badge&logo=python&logoColor=ffdd54)
 ![Streamlit](https://img.shields.io/badge/streamlit-FF4B4B?style=for-the-badge&logo=streamlit&logoColor=white)
 ![Pandas](https://img.shields.io/badge/pandas-150458?style=for-the-badge&logo=pandas&logoColor=white)
@@ -14,6 +13,14 @@ Examples:
 
 ## 🖼️ Demo / Screenshots
 
+## 🧰 Tech Stack
+
+| Component     | Technology                                          |
+|---------------|------------------------------------------------------|
+| Frontend      | Streamlit                                           |
+| Backend       | Python                                              |
+| Data          | CSV                                                 |
+| Visualization | Streamlit Charts                                    |
 
 ## Installation
 Give users a quick way to get started.
