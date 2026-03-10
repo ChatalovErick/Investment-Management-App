@@ -8,6 +8,11 @@ import altair as alt
 st.set_page_config(layout="wide")
 
 ## ---------------------------------------------------------------- ##
+##                          custom CSS                              ##
+## ---------------------------------------------------------------- ##
+
+
+## ---------------------------------------------------------------- ##
 ##               Load the investments data                          ##
 ## ---------------------------------------------------------------- ##
 
@@ -29,8 +34,126 @@ df = load_data()
 ## ---------------------------------------------------------------- ##
 ##               Portfolio page content and layout                  ##
 ## ---------------------------------------------------------------- ##
-with st.container(border=True): 
-    st.markdown("<h1 style='text-align: center'>Portfolio</h1>", unsafe_allow_html=True)
+with st.container(border=True):
+    st.markdown(
+        """
+        <h1 style='text-align:center; margin-top:0; margin-bottom:0.5rem;'>
+            Portfolio
+        </h1>
+        """,
+        unsafe_allow_html=True
+    )
+
+## ---------------------------------------------------------------- ##
+##               Filters for the portfolio assets                   ##
+## ---------------------------------------------------------------- ##
+with st.container(border=True):
+    st.subheader(f"Filter & View Controls")
+    # Row 2: Global Filter
+    # Get unique asset types and add "All" to the top
+    asset_types = ["All"] + sorted(df["asset_type"].unique().tolist())
+    
+    filter_val = st.selectbox("Filter for the graphs and table", asset_types)
+
+    # Logic to filter the dataframe
+    if filter_val == "All":
+        filtered_df = df.copy()
+    else:
+        filtered_df = df[df["asset_type"] == filter_val].copy()
+
+
+## ---------------------------------------------------------------- ##
+##               Charts for the portfolio assets                    ##
+## ---------------------------------------------------------------- ##
+
+with st.container(border=True):
+    # Row 3: Two Graphs Side-by-Side
+    graph_col1, graph_col2 = st.columns(2)
+
+    ## --- Pie chart (Using filtered_df) ---
+    with graph_col1:
+        with st.container(border=True):
+            st.subheader(f"Portfolio Allocation: {filter_val}")
+
+            if not filtered_df.empty:
+                # Compute total value per asset on the filtered data
+                filtered_df["total_value"] = filtered_df["price"] * filtered_df["quantity"]
+
+                # Group by asset
+                grouped = filtered_df.groupby("asset")["total_value"].sum().reset_index()
+
+                # Create pie chart
+                chart = alt.Chart(grouped).mark_arc().encode(
+                    theta="total_value",
+                    color="asset",
+                    tooltip=["asset", "total_value"]
+                )
+                st.altair_chart(chart, use_container_width=True)
+            else:
+                st.info("No data to display.")
+    
+    with graph_col2:
+        with st.container(border=True):
+            st.subheader(f"Asset Distribution: {filter_val}")
+
+            if not filtered_df.empty:
+                # Compute total value per asset
+                grouped = filtered_df.groupby("asset")["total_value"].sum().reset_index()
+
+                # Compute percentages
+                total = grouped["total_value"].sum()
+                grouped["percentage"] = (grouped["total_value"] / total) * 100
+
+                # Bar chart using percentages
+                bars  = (
+                    alt.Chart(grouped)
+                    .mark_bar()
+                    .encode(
+                        x=alt.X("asset", sort='-y'),
+                        y=alt.Y("percentage", 
+                                title="Percentage (%)",
+                                scale=alt.Scale(domain=[0, 100])
+                            ),
+                        color="asset",
+                        tooltip=[
+                            alt.Tooltip("asset:N", title="Asset"),
+                            alt.Tooltip("total_value:Q", title="Total Value", format=",.2f"),
+                        ]
+                    )
+                )
+
+                # Text labels
+                text = (
+                    alt.Chart(grouped)
+                    .mark_text(
+                        align="center",
+                        baseline="bottom",
+                        dy=-5,  # move text slightly above the bar
+                        fontSize=12
+                    )
+                    .encode(
+                        x="asset",
+                        y="percentage",
+                        text=alt.Text("percentage:Q", format=".1f")  # 1 decimal place
+                    )
+                    .transform_calculate(
+                        label="format(datum.percentage, '.1f') + ' %'"
+                    )
+                    .encode(text="label:N")
+                )
+
+                # Layer bars + text
+                chart = bars + text
+
+                st.altair_chart(chart, use_container_width=True)
+
+            else:
+                st.info("No data to display.")
+
+## ---------------------------------------------------------------- ##
+##               Action Buttons for adding and                      ##
+##              removing data to the investments                    ##
+## ---------------------------------------------------------------- ##
 
 # --- State Management ---
 if "show_add_form" not in st.session_state:
@@ -46,13 +169,11 @@ def toggle_delete():
     st.session_state.show_delete_form = not st.session_state.show_delete_form
     st.session_state.show_add_form = False # Close add if delete is opened
 
-## ---------------------------------------------------------------- ##
-##               Action Buttons for adding and                      ##
-##              removing data to the investments                    ##
-## ---------------------------------------------------------------- ##
-
 # --- Action Buttons ---
 with st.container(border=True):
+
+    st.subheader(f"Asset Management")
+
     btn_col1, btn_col2, btn_spacer = st.columns([1, 1, 4])
     
     with btn_col1:
@@ -114,69 +235,6 @@ if st.session_state.show_delete_form:
                 st.rerun()
         else:
             st.info("No entries to remove.")
-            
-
-## ---------------------------------------------------------------- ##
-##               Filters for the portfolio assets                   ##
-## ---------------------------------------------------------------- ##
-
-with st.container(border=True):
-    # Row 2: Global Filter
-    # Get unique asset types and add "All" to the top
-    asset_types = ["All"] + sorted(df["asset_type"].unique().tolist())
-    
-    filter_val = st.selectbox("Filter for the graphs and table", asset_types)
-
-    # Logic to filter the dataframe
-    if filter_val == "All":
-        filtered_df = df.copy()
-    else:
-        filtered_df = df[df["asset_type"] == filter_val].copy()
-
-## ---------------------------------------------------------------- ##
-##               Charts for the portfolio assets                    ##
-## ---------------------------------------------------------------- ##
-
-with st.container(border=True):
-    # Row 3: Two Graphs Side-by-Side
-    graph_col1, graph_col2 = st.columns(2)
-
-    ## --- Pie chart (Using filtered_df) ---
-    with graph_col1:
-        with st.container(border=True):
-            st.subheader(f"Allocation: {filter_val}")
-
-            if not filtered_df.empty:
-                # Compute total value per asset on the filtered data
-                filtered_df["total_value"] = filtered_df["price"] * filtered_df["quantity"]
-
-                # Group by asset
-                grouped = filtered_df.groupby("asset")["total_value"].sum().reset_index()
-
-                # Create pie chart
-                chart = alt.Chart(grouped).mark_arc().encode(
-                    theta="total_value",
-                    color="asset",
-                    tooltip=["asset", "total_value"]
-                )
-                st.altair_chart(chart, use_container_width=True)
-            else:
-                st.info("No data available for this filter.")
-    
-    with graph_col2:
-        with st.container(border=True):
-            st.subheader("Asset Value Comparison")
-            if not filtered_df.empty:
-                # Example Bar Chart using filtered data
-                bar_chart = alt.Chart(grouped).mark_bar().encode(
-                    x=alt.X("asset", sort='-y'),
-                    y="total_value",
-                    color="asset"
-                )
-                st.altair_chart(bar_chart, use_container_width=True)
-            else:
-                st.info("No data to display.")
-
 
 ## ---------------------------------------------------------------- ##
 ##               Table for the portfolio assets                    ##
@@ -184,7 +242,7 @@ with st.container(border=True):
 
 with st.container(border=True):
     with st.container(border=True):
-        st.subheader(f"Records for {filter_val}")
+        st.subheader(f"Holdings Details: {filter_val}")
         # Display the filtered dataframe
         # We drop the helper columns like 'total_value' or 'label' if they exist for a cleaner look
         display_df = filtered_df.drop(columns=["total_value", "label"], errors="ignore")
