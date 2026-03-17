@@ -2,12 +2,13 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import os
+from backend.asset_fetcher import get_current_price
 
 st.set_page_config(layout="wide")
 
-## ---------------------------------------------------------------- ##
-##                Load the investments data                         ##
-## ---------------------------------------------------------------- ##
+# ---------------------------------------------------------------- #
+# Load investments data
+# ---------------------------------------------------------------- #
 
 if not os.path.exists("data"):
     os.makedirs("data")
@@ -15,16 +16,43 @@ if not os.path.exists("data"):
 def load_data():
     try:
         data = pd.read_csv("data/investments.csv")
-        data['price'] = pd.to_numeric(data['price'], errors='coerce').fillna(0)
-        data['date'] = pd.to_datetime(data['date'])
 
+        # Convert types safely
+        data['price'] = pd.to_numeric(data['price'], errors='coerce').fillna(0)
         data['quantity'] = pd.to_numeric(data['quantity'], errors='coerce').fillna(0)
+        data['date'] = pd.to_datetime(data['date'], errors='coerce')
+
+        # Total value at purchase
+        data['total_value'] = pd.to_numeric(data.get('total_value'), errors='coerce')
         data['total_value'] = data['total_value'].fillna(data['price'] * data['quantity'])
+
         data = data.sort_values('date')
-        data['portfolio_balance'] = data['total_value'].cumsum()
+
+        # Fetch current prices
+        data["current_price"] = data.apply(
+            lambda row: get_current_price(row["asset_type"], row["ticker"]),
+            axis=1
+        )
+
+        # Current total value
+        data['current_total_value'] = pd.to_numeric(
+            data['current_price'] * data['quantity'], errors='coerce'
+        ).fillna(0)
+
+        # Current portfolio balance (cumulative)
+        data['current_portfolio_balance'] = data['current_total_value'].cumsum()
+        data['current_portfolio_balance'] = pd.to_numeric(
+            data['current_portfolio_balance'], errors='coerce'
+        ).fillna(0)
+
+        # Invested portfolio balance (cost basis)
+        data['invested_portfolio_balance'] = data['total_value'].cumsum()
+        data['invested_portfolio_balance'] = pd.to_numeric(
+            data['invested_portfolio_balance'], errors='coerce'
+        ).fillna(0)
 
         return data
-    
+
     except (FileNotFoundError, pd.errors.EmptyDataError):
         return pd.DataFrame(columns=[
             "date", "asset", "ticker", "asset_type",
@@ -35,136 +63,199 @@ def load_data():
 df = load_data()
 
 if df.empty:
-    st.warning("The dataset is empty. Please add some investments in the Porfolio page to see the charts.")
+    st.warning("The dataset is empty. Please add some investments in the Portfolio page to see the charts.")
     st.stop()
 
-## ---------------------------------------------------------------- ##
-##         Time line chart for the Portfolio Balance                ##
-## ---------------------------------------------------------------- ##
+# ---------------------------------------------------------------- #
+# Portfolio history tracking (current + invested)
+# ---------------------------------------------------------------- #
 
+HISTORY_FILE = "data/portfolio_history.csv"
 
+def load_history():
+    if os.path.exists(HISTORY_FILE):
+        hist = pd.read_csv(HISTORY_FILE, parse_dates=["date"])
+
+        # Auto-migrate missing columns
+        if "invested_portfolio_balance" not in hist.columns:
+            hist["invested_portfolio_balance"] = None
+
+        # Clean corrupted rows
+        hist['current_portfolio_balance'] = pd.to_numeric(
+            hist['current_portfolio_balance'], errors='coerce'
+        )
+        hist['invested_portfolio_balance'] = pd.to_numeric(
+            hist['invested_portfolio_balance'], errors='coerce'
+        )
+
+        # Forward-fill and replace remaining NaN
+        hist['current_portfolio_balance'] = hist['current_portfolio_balance'].ffill().fillna(0)
+        hist['invested_portfolio_balance'] = hist['invested_portfolio_balance'].ffill().fillna(0)
+
+        return hist
+
+    return pd.DataFrame(columns=["date", "current_portfolio_balance", "invested_portfolio_balance"])
+
+history = load_history()
+
+today = pd.Timestamp.today().normalize()
+
+today_current = float(df['current_portfolio_balance'].iloc[-1])
+today_invested = float(df['invested_portfolio_balance'].iloc[-1])
+
+# Append today's snapshot only (H1)
+if not (history['date'] == today).any():
+    new_row = pd.DataFrame({
+        "date": [today],
+        "current_portfolio_balance": [today_current],
+        "invested_portfolio_balance": [today_invested]
+    })
+    history = pd.concat([history, new_row], ignore_index=True)
+    history.to_csv(HISTORY_FILE, index=False)
+
+# ---------------------------------------------------------------- #
+# Timeframes (Line Chart Invested and Net Worth)
+# ---------------------------------------------------------------- #
 with st.container(border=True):
 
-    # Pre-calculate timeframes
-    df_daily = df.set_index('date').resample('D').last().ffill().reset_index()
-    df_weekly = df.set_index('date').resample('W').last().ffill().reset_index()
-    df_monthly = df.set_index('date').resample('ME').last().ffill().reset_index()
+    df_history = history.sort_values("date")
 
-    # 3. Create Figure
-    fig = go.Figure()
+    df_daily = df_history.set_index('date').resample('D').last().ffill().reset_index()
+    df_weekly = df_history.set_index('date').resample('W').last().ffill().reset_index()
+    df_monthly = df_history.set_index('date').resample('ME').last().ffill().reset_index()
 
-    # Adjusted Colors for Light Background
-    # Using slightly deeper saturations so they pop against white
-    colors = {
-        'daily': '#00A676',    # Emerald Green
-        'weekly': '#007BFF',   # Royal Blue
-        'monthly': '#8A2BE2'   # Blue Violet
-    }
+    # ---------------------------------------------------------------- #
+    # Profit margin calculations
+    # ---------------------------------------------------------------- #
 
-    # Add Area Traces
-    fig.add_trace(go.Scatter(
-        x=df_daily['date'], y=df_daily['portfolio_balance'],
-        name="Daily", mode='lines', visible=True,
-        line=dict(color=colors['daily'], width=2),
-        fill='tozeroy', fillcolor='rgba(0, 166, 118, 0.1)' # Faint green tint
-    ))
+    def pct_change(series):
+        if len(series) < 2:
+            return 0
+        prev = series.iloc[-2]
+        curr = series.iloc[-1]
+        if prev == 0:
+            return 0
+        return ((curr - prev) / prev) * 100
 
-    fig.add_trace(go.Scatter(
-        x=df_weekly['date'], y=df_weekly['portfolio_balance'],
-        name="Weekly", mode='lines+markers', visible=False,
-        line=dict(color=colors['weekly'], width=2),
-        fill='tozeroy', fillcolor='rgba(0, 123, 255, 0.1)' # Faint blue tint
-    ))
+    # Current values
+    daily_current = float(df_daily['current_portfolio_balance'].iloc[-1])
+    weekly_current = float(df_weekly['current_portfolio_balance'].iloc[-1])
+    monthly_current = float(df_monthly['current_portfolio_balance'].iloc[-1])
 
-    fig.add_trace(go.Scatter(
-        x=df_monthly['date'], y=df_monthly['portfolio_balance'],
-        name="Monthly", mode='lines+markers', visible=False,
-        line=dict(color=colors['monthly'], width=2),
-        fill='tozeroy', fillcolor='rgba(138, 43, 226, 0.1)' # Faint purple tint
-    ))
+    # Invested values
+    daily_invested = float(df_daily['invested_portfolio_balance'].iloc[-1])
+    weekly_invested = float(df_weekly['invested_portfolio_balance'].iloc[-1])
+    monthly_invested = float(df_monthly['invested_portfolio_balance'].iloc[-1])
 
-    # 4. Modern Light UI Styling
-    fig.update_layout(
-        template="plotly_white",
-        paper_bgcolor="#FFFFFF", 
-        plot_bgcolor="#FFFFFF",
-        margin=dict(t=100, l=40, r=40, b=40),
-        hovermode="x unified",
-        font=dict(family="Inter, sans-serif", color="#1F2937"), # Dark gray text for readability
-        
-        # Interval Selection Buttons
-        updatemenus=[
-            dict(
-                type="buttons",
-                direction="right",
-                x=0.01, y=1.12,
-                xanchor='left',
-                bgcolor="#F3F4F6",     # Light gray button background
-                font=dict(color="#374151", size=12),
-                active=0,
-                buttons=list([
-                    dict(label="DAILY", method="update", args=[{"visible": [True, False, False]}]),
-                    dict(label="WEEKLY", method="update", args=[{"visible": [False, True, False]}]),
-                    dict(label="MONTHLY", method="update", args=[{"visible": [False, False, True]}]),
-                ]),
-            )
-        ],
-        
-        # Range Selector
-        xaxis=dict(
-            showgrid=False,
-            linecolor='#E5E7EB', # Light border
-            rangeselector=dict(
-                buttons=list([
-                    dict(count=1, label="1M", step="month", stepmode="backward"),
-                    dict(count=6, label="6M", step="month", stepmode="backward"),
-                    dict(count=1, label="YTD", step="year", stepmode="todate"),
-                    dict(step="all", label="ALL")
-                ]),
-                bgcolor="#F3F4F6",
-                activecolor="#DBEAFE", # Soft blue for active state
-                font=dict(size=11, color="#374151")
-            ),
-            type="date"
-        ),
-        
-        yaxis=dict(
-            showgrid=True,
-            gridcolor="#F0F0F0", # Very subtle grid lines
-            position=1,
-            side="right",
-            tickprefix="$",
-            tickformat=",",
-            tickfont=dict(color="#6B7280") # Muted gray for axis labels
-        )
-    )
+    # Changes
+    daily_change = pct_change(df_daily['current_portfolio_balance'])
+    weekly_change = pct_change(df_weekly['current_portfolio_balance'])
+    monthly_change = pct_change(df_monthly['current_portfolio_balance'])
 
-    # Custom Metric Header
-    last_val = df['portfolio_balance'].iloc[-1]
-    prev_val = df['portfolio_balance'].iloc[-2]
-    change = ((last_val - prev_val) / prev_val) * 100
+    # ---------------------------------------------------------------- #
+    # Layout
+    # ---------------------------------------------------------------- #
 
-    col1, col2 = st.columns([3, 1])
+    col1, col2 = st.columns([2, 1])
+
     with col1:
-        st.title("Portfolio Intelligence")
+        st.title("Portfolio Overview")
+
     with col2:
-        st.metric("Net Worth", f"${last_val:,.0f}", f"{change:+.2f}% (Last Trade)")
+        with st.container(border=True):
 
-    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+            selected_tf = st.radio(
+                "Performance timeframe",
+                ["Daily", "Weekly", "Monthly"],
+                horizontal=True
+            )
 
-# -----------------------------------------------------------
-# Pie chart: Portfolio allocation (Top 10 via Plotly)
-# -----------------------------------------------------------
+            if selected_tf == "Daily":
+                metric_current = daily_current
+                metric_invested = daily_invested
+                metric_change = daily_change
+                df_selected = df_daily
+            elif selected_tf == "Weekly":
+                metric_current = weekly_current
+                metric_invested = weekly_invested
+                metric_change = weekly_change
+                df_selected = df_weekly
+            else:
+                metric_current = monthly_current
+                metric_invested = monthly_invested
+                metric_change = monthly_change
+                df_selected = df_monthly
+
+            st.metric(
+                label=f"Net Worth – {selected_tf}",
+                value=f"${metric_current:,.2f}",
+                delta=f"{metric_change:+.2f}%"
+            )
+
+            st.metric(
+                label=f"Invested – {selected_tf}",
+                value=f"${metric_invested:,.2f}"
+            )
+
+    # ---------------------------------------------------------------- #
+    # Combined chart (Invested vs Current)
+    # ---------------------------------------------------------------- #
+    with st.container(border=True):
+        fig = go.Figure()
+
+        fig.add_trace(go.Scatter(
+            x=df_selected['date'],
+            y=df_selected['current_portfolio_balance'],
+            mode='lines+markers',
+            name="Current Value",
+            line=dict(color="#007BFF", width=2),
+            hovertemplate="$%{y:,.2f}<extra></extra>"
+        ))
+
+        fig.add_trace(go.Scatter(
+            x=df_selected['date'],
+            y=df_selected['invested_portfolio_balance'],
+            mode='lines+markers',
+            name="Invested Value",
+            line=dict(color="#00A676", width=2, dash="dot"),
+            hovertemplate="$%{y:,.2f}<extra></extra>"
+        ))
+
+        fig.update_layout(
+            template="plotly_white",
+            paper_bgcolor="#FFFFFF",
+            plot_bgcolor="#FFFFFF",
+            margin=dict(t=40, l=40, r=40, b=40),
+            hovermode="x unified",
+            font=dict(family="Inter, sans-serif", color="#1F2937"),
+            xaxis=dict(
+                showgrid=False,
+                linecolor='#E5E7EB',
+                type="date",
+                rangeslider=dict(visible=False)
+            ),
+            yaxis=dict(
+                showgrid=True,
+                gridcolor="#F0F0F0",
+                tickprefix="$",
+                tickformat=",.2f",
+                tickfont=dict(color="#6B7280")
+            )
+        )
+
+        st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+
+# ---------------------------------------------------------------- #
+# Pie chart: Portfolio allocation
+# ---------------------------------------------------------------- #
 
 if not df.empty:
     with st.container(border=True):
         st.subheader("Portfolio Allocation")
 
-        # 1. Group and Sort
         grouped = df.groupby("asset")["total_value"].sum().reset_index()
         grouped = grouped.sort_values("total_value", ascending=False)
 
-        # 2. Logic for "Others"
         top_n = 9
         if len(grouped) > top_n:
             top_df = grouped.head(top_n).copy()
@@ -174,14 +265,14 @@ if not df.empty:
         else:
             chart_data = grouped
 
-        # 3. Create Plotly Figure
         fig_pie = go.Figure(data=[go.Pie(
             labels=chart_data["asset"],
             values=chart_data["total_value"],
-            hole=0.5, # Makes it a donut
+            hole=0.5,
             marker=dict(
-                colors=['#00A676', '#007BFF', '#8A2BE2', '#FF8C00', '#FFD700', '#FF1493', '#00CED1', '#7FFF00', '#FF4500', '#BDC3C7'],
-                line=dict(color='#FFFFFF', width=2) # Clean white borders
+                colors=['#00A676', '#007BFF', '#8A2BE2', '#FF8C00', '#FFD700',
+                        '#FF1493', '#00CED1', '#7FFF00', '#FF4500', '#BDC3C7'],
+                line=dict(color='#FFFFFF', width=2)
             ),
             textinfo='percent+label',
             hoverinfo='label+value+percent',
@@ -189,7 +280,6 @@ if not df.empty:
             insidetextorientation='radial'
         )])
 
-        # 4. Light Mode Layout
         fig_pie.update_layout(
             template="plotly_white",
             paper_bgcolor="#FFFFFF",
@@ -209,5 +299,3 @@ if not df.empty:
         st.plotly_chart(fig_pie, use_container_width=True, config={'displayModeBar': False})
 else:
     st.info("No data found.")
-
-

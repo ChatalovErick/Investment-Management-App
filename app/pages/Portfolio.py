@@ -5,6 +5,7 @@ import os
 from datetime import date
 import plotly.express as px
 from streamlit_plotly_events import plotly_events
+from backend.asset_fetcher import get_current_price
 
 # 1. Page Configuration
 st.set_page_config(page_title="My Portfolio", layout="wide")
@@ -38,6 +39,14 @@ df = load_data()
 if df.empty:
     st.warning("The dataset is empty. Please add some investments to see the charts.")
     st.stop()
+
+## Get the current price for some assets ##
+
+df.insert(
+    5,  # position index
+    "current_price",
+    df.apply(lambda row: get_current_price(row["asset_type"], row["ticker"]), axis=1)
+)
 
 ## ---------------------------------------------------------------- ##
 ##                Investment Drill-Down Logic                       ##
@@ -169,9 +178,13 @@ with st.container(border=True):
                 submitted = st.form_submit_button("Add Entry")
 
             if submitted:
+
+                total_value = price * quantity
+
                 new_row = {"date": entry_date, "asset": asset, "ticker": ticker, "asset_type": asset_type, 
                         "price": price, "quantity": quantity, "fees": fees, "currency": currency, 
-                        "goal": goal, "notes": notes}
+                        "goal": goal, "notes": notes, "total_value": total_value}
+                        
                 df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
                 df.to_csv("data/investments.csv", index=False)
                 st.success("Entry added!")
