@@ -2,7 +2,6 @@ import pandas as pd
 import streamlit as st
 import finnhub
 import requests
-import yfinance as yf
 
 # -----------------------------
 # Finnhub client (for stocks)
