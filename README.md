@@ -13,7 +13,7 @@ Examples:
 
 ## 🖼️ Demo / Screenshots
 
-<img width="1860" height="945" alt="Portfolio page" src="https://github.com/user-attachments/assets/3deae245-9696-4a69-9694-1caf4c291010" />
+
 
 ## 🧰 Tech Stack
 
